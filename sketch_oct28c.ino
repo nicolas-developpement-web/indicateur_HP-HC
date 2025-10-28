@@ -67,77 +67,96 @@ int tempsAvantChangement(int h, int m) {
   return prochain;
 }
 
-// ====================== PORTAIL WEB ======================
+// ====================== PORTAIL WEB DYNAMIQUE ======================
 void startAP() {
   Serial.println("🔌 Pas de WiFi, démarrage du point d'accès...");
   WiFi.softAP("ESP_Config");
   Serial.print("IP de l'AP: "); Serial.println(WiFi.softAPIP());
 
-  server.on("/", HTTP_GET, [](){
-    int n = WiFi.scanNetworks();
-    String options = "";
-    for (int i = 0; i < n; ++i) {
-      options += "<option value='" + WiFi.SSID(i) + "'>" + WiFi.SSID(i) + " (" + String(WiFi.RSSI(i)) + " dBm)</option>";
-    }
+  // Page principale
+  server.on("/", HTTP_GET, []() {
+      String page = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+      page += "<h2>Configuration WiFi et NTP</h2>";
+      page += "<form action='/save' method='POST'>";
+      page += "SSID: <select id='ssid' name='ssid'></select><br>";
+      page += "Mot de passe: <input name='password' type='password'><br>";
+      page += "NTP Server: <input name='ntp' value='" + ntpServer_saved + "'><br>";
 
-    String page = "<html><body>";
-    page += "<h2>Configuration WiFi et NTP</h2>";
-    page += "<form action='/save' method='POST'>";
-    page += "SSID: <select name='ssid'>" + options + "</select><br>";
-    page += "Mot de passe: <input name='password' type='password'><br>";
-    page += "NTP Server: <input name='ntp' value='" + ntpServer_saved + "'><br>";
+      page += "<h3>Plage 1</h3>";
+      page += "Début: <input type='number' name='p1dH' min='0' max='23' placeholder='HH' style='width:50px;'> : ";
+      page += "<input type='number' name='p1dM' min='0' max='59' placeholder='MM' style='width:50px;'><br>";
+      page += "Fin: <input type='number' name='p1fH' min='0' max='23' placeholder='HH' style='width:50px;'> : ";
+      page += "<input type='number' name='p1fM' min='0' max='59' placeholder='MM' style='width:50px;'><br>";
 
-    page += "<h3>Plage 1</h3>";
-    page += "Début: <input type='number' name='p1dH' min='0' max='23' placeholder='HH' style='width:50px;'> : ";
-    page += "<input type='number' name='p1dM' min='0' max='59' placeholder='MM' style='width:50px;'><br>";
-    page += "Fin: <input type='number' name='p1fH' min='0' max='23' placeholder='HH' style='width:50px;'> : ";
-    page += "<input type='number' name='p1fM' min='0' max='59' placeholder='MM' style='width:50px;'><br>";
+      page += "<h3>Plage 2</h3>";
+      page += "Début: <input type='number' name='p2dH' min='0' max='23' placeholder='HH' style='width:50px;'> : ";
+      page += "<input type='number' name='p2dM' min='0' max='59' placeholder='MM' style='width:50px;'><br>";
+      page += "Fin: <input type='number' name='p2fH' min='0' max='23' placeholder='HH' style='width:50px;'> : ";
+      page += "<input type='number' name='p2fM' min='0' max='59' placeholder='MM' style='width:50px;'><br>";
 
-    page += "<h3>Plage 2</h3>";
-    page += "Début: <input type='number' name='p2dH' min='0' max='23' placeholder='HH' style='width:50px;'> : ";
-    page += "<input type='number' name='p2dM' min='0' max='59' placeholder='MM' style='width:50px;'><br>";
-    page += "Fin: <input type='number' name='p2fH' min='0' max='23' placeholder='HH' style='width:50px;'> : ";
-    page += "<input type='number' name='p2fM' min='0' max='59' placeholder='MM' style='width:50px;'><br>";
+      page += "<input type='submit' value='Sauvegarder'>";
+      page += "</form>";
 
-    page += "<input type='submit' value='Sauvegarder'>";
-    page += "</form></body></html>";
-    server.send(200, "text/html", page);
+      // Script JS pour scan WiFi dynamique
+      page += "<script>";
+      page += "function scanWiFi() {";
+      page += "fetch('/scan').then(resp => resp.json()).then(data => {";
+      page += "let sel = document.getElementById('ssid'); sel.innerHTML='';";
+      page += "data.forEach(ssid => { sel.innerHTML += '<option value=\"'+ssid+'\">'+ssid+'</option>'; });";
+      page += "});}";
+      page += "scanWiFi(); setInterval(scanWiFi, 5000);";
+      page += "</script></head><body></body></html>";
+
+      server.send(200, "text/html", page);
   });
 
-  server.on("/save", HTTP_POST, [](){
-    ssid_saved = server.arg("ssid");
-    password_saved = server.arg("password");
-    ntpServer_saved = server.arg("ntp");
+  // Route /scan pour AJAX
+  server.on("/scan", HTTP_GET, []() {
+      int n = WiFi.scanNetworks();
+      String ssids = "[";
+      for (int i = 0; i < n; ++i) {
+          ssids += "\"" + WiFi.SSID(i) + "\"";
+          if (i < n - 1) ssids += ",";
+      }
+      ssids += "]";
+      server.send(200, "application/json", ssids);
+  });
 
-    plage1_debutH = server.arg("p1dH").toInt();
-    plage1_debutM = server.arg("p1dM").toInt();
-    plage1_finH = server.arg("p1fH").toInt();
-    plage1_finM = server.arg("p1fM").toInt();
-    plage2_debutH = server.arg("p2dH").toInt();
-    plage2_debutM = server.arg("p2dM").toInt();
-    plage2_finH = server.arg("p2fH").toInt();
-    plage2_finM = server.arg("p2fM").toInt();
+  // Route /save pour sauvegarde
+  server.on("/save", HTTP_POST, []() {
+      ssid_saved = server.arg("ssid");
+      password_saved = server.arg("password");
+      ntpServer_saved = server.arg("ntp");
 
-    Serial.println("💾 Configuration sauvegardée :");
-    Serial.printf("SSID: %s, NTP: %s\n", ssid_saved.c_str(), ntpServer_saved.c_str());
-    Serial.printf("Plage1: %02d:%02d -> %02d:%02d\n", plage1_debutH, plage1_debutM, plage1_finH, plage1_finM);
-    Serial.printf("Plage2: %02d:%02d -> %02d:%02d\n", plage2_debutH, plage2_debutM, plage2_finH, plage2_finM);
+      plage1_debutH = server.arg("p1dH").toInt();
+      plage1_debutM = server.arg("p1dM").toInt();
+      plage1_finH = server.arg("p1fH").toInt();
+      plage1_finM = server.arg("p1fM").toInt();
+      plage2_debutH = server.arg("p2dH").toInt();
+      plage2_debutM = server.arg("p2dM").toInt();
+      plage2_finH = server.arg("p2fH").toInt();
+      plage2_finM = server.arg("p2fM").toInt();
 
-    preferences.putString("ssid", ssid_saved);
-    preferences.putString("password", password_saved);
-    preferences.putString("ntp", ntpServer_saved);
-    preferences.putInt("p1dH", plage1_debutH);
-    preferences.putInt("p1dM", plage1_debutM);
-    preferences.putInt("p1fH", plage1_finH);
-    preferences.putInt("p1fM", plage1_finM);
-    preferences.putInt("p2dH", plage2_debutH);
-    preferences.putInt("p2dM", plage2_debutM);
-    preferences.putInt("p2fH", plage2_finH);
-    preferences.putInt("p2fM", plage2_finM);
+      Serial.println("💾 Configuration sauvegardée :");
+      Serial.printf("SSID: %s, NTP: %s\n", ssid_saved.c_str(), ntpServer_saved.c_str());
+      Serial.printf("Plage1: %02d:%02d -> %02d:%02d\n", plage1_debutH, plage1_debutM, plage1_finH, plage1_finM);
+      Serial.printf("Plage2: %02d:%02d -> %02d:%02d\n", plage2_debutH, plage2_debutM, plage2_finH, plage2_finM);
 
-    server.send(200, "text/html", "<h2>✅ Sauvegardé ! Redémarrage...</h2>");
-    delay(2000);
-    ESP.restart();
+      preferences.putString("ssid", ssid_saved);
+      preferences.putString("password", password_saved);
+      preferences.putString("ntp", ntpServer_saved);
+      preferences.putInt("p1dH", plage1_debutH);
+      preferences.putInt("p1dM", plage1_debutM);
+      preferences.putInt("p1fH", plage1_finH);
+      preferences.putInt("p1fM", plage1_finM);
+      preferences.putInt("p2dH", plage2_debutH);
+      preferences.putInt("p2dM", plage2_debutM);
+      preferences.putInt("p2fH", plage2_finH);
+      preferences.putInt("p2fM", plage2_finM);
+
+      server.send(200, "text/html", "<h2>✅ Sauvegardé ! Redémarrage...</h2>");
+      delay(2000);
+      ESP.restart();
   });
 
   server.begin();
@@ -180,7 +199,6 @@ void setup() {
   digitalWrite(LED_ROUGE, LOW);
   digitalWrite(LED_WIFI, HIGH);
 
-  // PWM LED_WIFI avec ledcAttachChannel
   ledcAttachChannel(LED_WIFI, pwmFreq, pwmResolution, pwmChannel);
 
   preferences.begin("esp_config", false);
@@ -209,6 +227,8 @@ void setup() {
 
 // ====================== LOOP ======================
 void loop() {
+  server.handleClient();
+
   bool wifiConnected = (WiFi.status() == WL_CONNECTED);
   struct tm timeinfo;
   bool timeSynced = getLocalTime(&timeinfo);
