@@ -4,7 +4,7 @@
 // === Broches ===
 #define LED_VERTE 6
 #define LED_ROUGE 7
-#define LED_WIFI LED_BUILTIN  // LED intégrée (souvent GPIO8 ou GPIO2 sur ESP32-C3)
+#define LED_WIFI LED_BUILTIN  // LED intégrée (souvent GPIO8 ou GPIO2 sur ESP32-C3) en mode inversé car active à LOW
 
 // === WiFi ===
 const char* ssid     = "NEO";
@@ -57,7 +57,7 @@ void wifiStatusLED(bool wifiConnected, bool timeSynced) {
   } 
   else {
     // Allumée fixe : tout va bien
-    digitalWrite(LED_WIFI, HIGH);
+    digitalWrite(LED_WIFI, LOW);
   }
 }
 
