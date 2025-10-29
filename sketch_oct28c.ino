@@ -1,5 +1,5 @@
 #include <WiFi.h>
-#include <ESP32WebServer.h>
+#include <WebServer.h>
 #include <Preferences.h>
 #include <time.h>
 
@@ -13,7 +13,7 @@ const int pwmFreq = 5000;
 const int pwmResolution = 8;
 
 Preferences preferences;
-ESP32WebServer server(80);
+WebServer server(80);
 
 // Variables de configuration sauvegardées
 String ssid_saved, password_saved, ntpServer_saved;
@@ -28,8 +28,7 @@ bool estDansPlage(int h, int m) {
   int debut2 = plage2_debutH * 60 + plage2_debutM;
   int fin2   = plage2_finH * 60 + plage2_finM;
 
-  bool resultat = ((minutes >= debut1 && minutes <= fin1) ||
-                   (minutes >= debut2 && minutes <= fin2));
+  bool resultat = ((minutes >= debut1 && minutes <= fin1) || (minutes >= debut2 && minutes <= fin2));
 
   Serial.printf("   ⏱ estDansPlage(): %02d:%02d → %s\n", h, m, resultat ? "OUI" : "NON");
   return resultat;
@@ -56,11 +55,15 @@ int tempsAvantChangement(int h, int m) {
 
 void wifiStatusLED(bool wifiConnected, bool timeSynced) {
   if (!wifiConnected) {
+    digitalWrite(LED_VERTE, LOW);
+    digitalWrite(LED_ROUGE, LOW);
     ledcWrite(pwmChannel, 128);
     Serial.println("💡 LED WiFi : clignote lentement (non connecté)");
     delay(200);
     ledcWrite(pwmChannel, 0);
   } else if (wifiConnected && !timeSynced) {
+    digitalWrite(LED_VERTE, LOW);
+    digitalWrite(LED_ROUGE, LOW);
     ledcWrite(pwmChannel, 64);
     Serial.println("💡 LED WiFi : clignote rapide (connecté, NTP non sync)");
     delay(100);
@@ -73,52 +76,140 @@ void wifiStatusLED(bool wifiConnected, bool timeSynced) {
 // ---------------- INTERFACE WEB ----------------
 void handleRoot() {
   Serial.println("🌐 Requête / : page de configuration envoyée");
-  String page = "<html><head><meta charset='UTF-8'>";
-  page += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-  page += "<h2>Configuration WiFi / NTP / Heures creuses</h2>";
+  String page = "";
+  page += "<!DOCTYPE HTML><html><head><title>Indication Heures Creuses</title>";
+  page += "<meta charset='UTF-8'>";
+  page += "<meta name='viewport' content='width=device-width, initial-scale=1, user-scalable=no'>";
+
+  // --- Style moderne & responsive ---
+  page += "<style>";
+  page += "body {font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f4f4f4; color: #333;}";
+  page += "h1, h2{text-align: center;}";
+  page += "h4 {margin-bottom: 5px;}";
+  page += "form {max-width: 420px; margin: 20px auto; background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);}";
+  page += "label {display: block; margin-top: 10px; font-weight: bold;}";
+  page += "input, select {width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; box-sizing: border-box;}";
+  page += "input[type='number'] {width: 48%; display: inline-block;}";
+  page += "input[type='submit'] {background-color: #0078d7; color: white; border: none; cursor: pointer; margin-top: 15px; font-size: 16px; border-radius: 8px; padding: 10px;}";
+  page += "input[type='submit']:hover {background-color: #005fa3;}";
+  page += "@media (max-width: 500px) {form {padding: 15px;} input[type='number'] {width: 15%;}}";
+  page += "@media (prefers-color-scheme: dark) {body {background: #121212; color: #eee;} form {background: #1e1e1e; box-shadow: 0 2px 6px rgba(255,255,255,0.1);} input, select {background:#2a2a2a; color:#eee; border:1px solid #555;} input[type='submit'] {background:#2196f3;} input[type='submit']:hover {background:#1976d2;}}";
+  page += "</style>";
+
+  page += "</head><body>";
+
+  page += "<h1>Configuration</h1>";
   page += "<form action='/save' method='POST'>";
 
-  page += "SSID : <select id='ssid' name='ssid'></select><br>";
-  page += "Mot de passe : <input name='password' type='password'><br>";
-  page += "Serveur NTP : <input name='ntp' value='" + ntpServer_saved + "'><br>";
+  // --- Sélection du WiFi ---
+  page += "<label for='ssidSelect'>SSID disponible :</label>";
+  page += "<select id='ssidSelect'></select>";
 
-  page += "<h3>Plage 1</h3>";
-  page += "Début : <input type='number' name='p1dH' min='0' max='23' value='" + String(plage1_debutH) + "'>h ";
-  page += "<input type='number' name='p1dM' min='0' max='59' value='" + String(plage1_debutM) + "'>m<br>";
-  page += "Fin : <input type='number' name='p1fH' min='0' max='23' value='" + String(plage1_finH) + "'>h ";
-  page += "<input type='number' name='p1fM' min='0' max='59' value='" + String(plage1_finM) + "'>m<br>";
+  page += "<label for='ssid'>SSID choisi :</label>";
+  page += "<input id='ssid' name='ssid' readonly>";
 
-  page += "<h3>Plage 2</h3>";
-  page += "Début : <input type='number' name='p2dH' min='0' max='23' value='" + String(plage2_debutH) + "'>h ";
-  page += "<input type='number' name='p2dM' min='0' max='59' value='" + String(plage2_debutM) + "'>m<br>";
-  page += "Fin : <input type='number' name='p2fH' min='0' max='23' value='" + String(plage2_finH) + "'>h ";
-  page += "<input type='number' name='p2fM' min='0' max='59' value='" + String(plage2_finM) + "'>m<br>";
+  page += "<label for='password'>Mot de passe :</label>";
+  page += "<input name='password' id='password' type='password'>";
+
+  page += "<label for='ntp'>Serveur NTP :</label>";
+  page += "<input name='ntp' id='ntp' value='" + ntpServer_saved + "'>";
+  page += "<br>";
+
+  page += "<h2>Choix des heures creuses</h2>";
+
+  page += "<h4>Plage 1</h4>";
+  page += "Début : <input type='number' name='p1dH' min='0' max='23' value='" + String(plage1_debutH) + "'> h ";
+  page += "<input type='number' name='p1dM' min='0' max='59' value='" + String(plage1_debutM) + "'> m<br>";
+  page += "Fin : <input type='number' name='p1fH' min='0' max='23' value='" + String(plage1_finH) + "'> h ";
+  page += "<input type='number' name='p1fM' min='0' max='59' value='" + String(plage1_finM) + "'> m<br>";
+
+  page += "<h4>Plage 2</h4>";
+  page += "Début : <input type='number' name='p2dH' min='0' max='23' value='" + String(plage2_debutH) + "'> h ";
+  page += "<input type='number' name='p2dM' min='0' max='59' value='" + String(plage2_debutM) + "'> m<br>";
+  page += "Fin : <input type='number' name='p2fH' min='0' max='23' value='" + String(plage2_finH) + "'> h ";
+  page += "<input type='number' name='p2fM' min='0' max='59' value='" + String(plage2_finM) + "'> m<br><br>";
 
   page += "<input type='submit' value='Sauvegarder'>";
   page += "</form>";
 
+  // --- Script WiFi dynamique ---
   page += "<script>";
-  page += "function scanWiFi(){fetch('/scan').then(r=>r.json()).then(data=>{";
-  page += "let sel=document.getElementById('ssid'); sel.innerHTML='';";
-  page += "data.forEach(s=>{sel.innerHTML+='<option value=\"'+s+'\">'+s+'</option>';});";
-  page += "});}";
-  page += "scanWiFi(); setInterval(scanWiFi,5000);";
-  page += "</script></body></html>";
+  page += "document.addEventListener('DOMContentLoaded', function() {";
+  page += "  const sel = document.getElementById('ssidSelect');";
+  page += "  const ssidInput = document.getElementById('ssid');";
+  page += "  let userSelectedSSID = null;";
+  page += "";
+  page += "  function setOptions(list){";
+  page += "    sel.innerHTML='';";
+  page += "    list.forEach(s=>{";
+  page += "      const opt=document.createElement('option');";
+  page += "      opt.value=s; opt.textContent=s;";
+  page += "      sel.appendChild(opt);";
+  page += "    });";
+  page += "  }";
+  page += "";
+  page += "  async function fetchScan(){";
+  page += "    try {";
+  page += "      const resp = await fetch('/scan', {cache:'no-store'});";
+  page += "      try {";
+  page += "        const data = await resp.json();";
+  page += "        if(Array.isArray(data)) return data.map(String);";
+  page += "        throw new Error('JSON invalide');";
+  page += "      } catch(eJson){";
+  page += "        const txt = await resp.text();";
+  page += "        const parts = txt.split(/\\r?\\n|,/).map(s=>s.trim()).filter(Boolean);";
+  page += "        return parts;";
+  page += "      }";
+  page += "    } catch(e){ console.error('Erreur fetch /scan:', e); return null; }";
+  page += "  }";
+  page += "";
+  page += "  async function scanWiFi(){";
+  page += "    const list = await fetchScan();";
+  page += "    if(!list){ sel.innerHTML='<option>(Erreur scan)</option>'; if(ssidInput) ssidInput.value=''; return; }";
+  page += "    const previous = sel.value;";
+  page += "    setOptions(list);";
+  page += "    if(userSelectedSSID && list.includes(userSelectedSSID)) sel.value=userSelectedSSID;";
+  page += "    else if(previous && list.includes(previous)) sel.value=previous;";
+  page += "    else if(list.length>0) sel.selectedIndex=0;";
+  page += "    if(ssidInput) ssidInput.value=sel.value||'';";
+  page += "  }";
+  page += "";
+  page += "  sel.addEventListener('change', ()=>{";
+  page += "    userSelectedSSID = sel.value;";
+  page += "    if(ssidInput) ssidInput.value = userSelectedSSID;";
+  page += "  });";
+  page += "";
+  page += "  scanWiFi();";
+  page += "  setInterval(scanWiFi, 10000);";
+  page += "});";
+  page += "</script>";
+
+  page += "</body></html>";
+
 
   server.send(200, "text/html", page);
 }
 
 void handleScan() {
   Serial.println("🌐 Scan des réseaux WiFi...");
+  // Lance le scan (bloquant, renvoie nombre de réseaux)
   int n = WiFi.scanNetworks();
+  // Commence le JSON array
   String ssids = "[";
   for (int i = 0; i < n; i++) {
-    ssids += "\"" + WiFi.SSID(i) + "\"";
-    if (i < n - 1) ssids += ",";
+    String ssid = WiFi.SSID(i);
+    ssid.replace("\"", "\\\""); // échappe les guillemets
+    ssids += "\"" + ssid + "\"";
+    if (i < n - 1) ssids += ","; 
+    // Affiche dans la console
     Serial.printf("   📶 Réseau détecté : %s (%ddBm)\n", WiFi.SSID(i).c_str(), WiFi.RSSI(i));
   }
   ssids += "]";
+  // Renvoie JSON au client
+  server.sendHeader("Content-Type", "application/json");
   server.send(200, "application/json", ssids);
+  // Nettoie les anciens résultats pour le prochain scan
+  WiFi.scanDelete();
 }
 
 void handleSave() {
@@ -176,8 +267,8 @@ bool connectSavedWiFi() {
 }
 
 void startAP() {
-  Serial.println("📡 Mode Point d'accès activé : SSID = ESP32_Config");
-  WiFi.softAP("ESP32_Config");
+  Serial.println("📡 Mode Point d'accès activé : SSID = HeuresCreuses");
+  WiFi.softAP("HeuresCreuses");
   Serial.print("   IP d'accès : ");
   Serial.println(WiFi.softAPIP());
 
