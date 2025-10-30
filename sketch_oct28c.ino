@@ -20,6 +20,10 @@ String ssid_saved, password_saved, ntpServer_saved;
 int plage1_debutH, plage1_debutM, plage1_finH, plage1_finM;
 int plage2_debutH, plage2_debutM, plage2_finH, plage2_finM;
 
+// ---------------- Variables LED non bloquantes ----------------
+unsigned long previousBlinkMillis = 0;
+bool blinkState = false;
+
 // ---------------- FONCTIONS UTILITAIRES ----------------
 bool estDansPlage(int h, int m) {
   int minutes = h * 60 + m;
@@ -28,28 +32,41 @@ bool estDansPlage(int h, int m) {
   int debut2 = plage2_debutH * 60 + plage2_debutM;
   int fin2   = plage2_finH * 60 + plage2_finM;
 
-  bool resultat = ((minutes >= debut1 && minutes <= fin1) || (minutes >= debut2 && minutes <= fin2));
+  bool dans1 = (debut1 < fin1) ? (minutes >= debut1 && minutes < fin1)
+                               : (minutes >= debut1 || minutes < fin1);
+  bool dans2 = (debut2 < fin2) ? (minutes >= debut2 && minutes < fin2)
+                               : (minutes >= debut2 || minutes < fin2);
 
-  Serial.printf("   ⏱ estDansPlage(): %02d:%02d → %s\n", h, m, resultat ? "OUI" : "NON");
+  bool resultat = (dans1 || dans2);
+  Serial.printf("   ⏱ %02d:%02d est dans la plage (%02d:%02d/%02d:%02d ou %02d:%02d/%02d:%02d) → %s\n", h, m, plage1_debutH, plage1_debutM, plage1_finH, plage1_finM, plage2_debutH, plage2_debutM, plage2_finH, plage2_finM, resultat ? "OUI 🟢" : "NON 🔴");
   return resultat;
 }
 
 int tempsAvantChangement(int h, int m) {
   int minutes = h * 60 + m;
-  int points[] = {
-    plage1_debutH * 60 + plage1_debutM,
-    plage1_finH * 60 + plage1_finM,
-    plage2_debutH * 60 + plage2_debutM,
-    plage2_finH * 60 + plage2_finM
-  };
-  int prochain = 9999;
+
+  int debuts[2] = { plage1_debutH * 60 + plage1_debutM,
+                    plage2_debutH * 60 + plage2_debutM };
+  int fins[2]   = { plage1_finH * 60 + plage1_finM,
+                    plage2_finH * 60 + plage2_finM };
+
+  // Liste des points où l’état change (début ou fin)
+  int points[4] = { debuts[0], fins[0], debuts[1], fins[1] };
+
+  // On cherche le prochain changement en minutes
+  int prochain = 24 * 60; // valeur max = 1 jour
+  bool found = false;
   for (int i = 0; i < 4; i++) {
-    if (minutes < points[i]) {
-      prochain = points[i] - minutes;
-      break;
+    int diff = points[i] - minutes;
+    if (diff <= 0) diff += 24 * 60; // si déjà passé aujourd'hui → demain
+    if (diff < prochain) {
+      prochain = diff;
+      found = true;
     }
   }
-  Serial.printf("   ⏱ tempsAvantChangement(): %d min restantes\n", prochain);
+
+  if (!found) prochain = 9999;
+  Serial.printf("   ⏱ temps avant changement: %d min restantes\n", prochain);
   return prochain;
 }
 
@@ -77,7 +94,7 @@ void wifiStatusLED(bool wifiConnected, bool timeSynced) {
 void handleRoot() {
   Serial.println("🌐 Requête / : page de configuration envoyée");
   String page = "";
-  page += "<!DOCTYPE HTML><html><head><title>Indication Heures Creuses</title>";
+  page += "<!DOCTYPE HTML><html><head><title>Indication Heures Pleines-Creuses</title>";
   page += "<meta charset='UTF-8'>";
   page += "<meta name='viewport' content='width=device-width, initial-scale=1, user-scalable=no'>";
 
@@ -183,10 +200,7 @@ void handleRoot() {
   page += "  setInterval(scanWiFi, 10000);";
   page += "});";
   page += "</script>";
-
   page += "</body></html>";
-
-
   server.send(200, "text/html", page);
 }
 
@@ -201,7 +215,6 @@ void handleScan() {
     ssid.replace("\"", "\\\""); // échappe les guillemets
     ssids += "\"" + ssid + "\"";
     if (i < n - 1) ssids += ","; 
-    // Affiche dans la console
     Serial.printf("   📶 Réseau détecté : %s (%ddBm)\n", WiFi.SSID(i).c_str(), WiFi.RSSI(i));
   }
   ssids += "]";
@@ -239,7 +252,7 @@ void handleSave() {
   preferences.putInt("p2fM", plage2_finM);
 
   Serial.println("✅ Configuration sauvegardée en mémoire !");
-  server.send(200, "text/html", "<h3>✅ Configuration sauvegardée ! Redémarrage...</h3>");
+  server.send(200, "text/html; charset=utf-8", "<h3>✅ Configuration sauvegardée ! Redémarrage...</h3>");
   delay(2000);
   ESP.restart();
 }
@@ -267,9 +280,9 @@ bool connectSavedWiFi() {
 }
 
 void startAP() {
-  Serial.println("📡 Mode Point d'accès activé : SSID = HeuresCreuses");
-  WiFi.softAP("HeuresCreuses");
-  Serial.print("   IP d'accès : ");
+  Serial.println("📡 Mode Point d'accès activé : SSID = " + String(hostname));
+  WiFi.softAP(hostname.c_str());
+  Serial.print("   IP d'accès : http://");
   Serial.println(WiFi.softAPIP());
 
   server.on("/", handleRoot);
@@ -285,12 +298,18 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
+  String mac = WiFi.macAddress(); // Récupérer l'adresse MAC complète (exemple : "24:6F:28:BB:2E:E8")
+  mac.replace(":", "");
+  String macSuffix = mac.substring(mac.length() - 6); // "BB2EE8"
+  String hostname  = "HeuresCreuses_" + macSuffix;
+  WiFi.setHostname(hostname.c_str());
+
   pinMode(LED_VERTE, OUTPUT);
   pinMode(LED_ROUGE, OUTPUT);
   pinMode(LED_WIFI, OUTPUT);
   digitalWrite(LED_VERTE, LOW);
   digitalWrite(LED_ROUGE, LOW);
-  digitalWrite(LED_WIFI, HIGH);
+  digitalWrite(LED_WIFI, HIGH); // car active sur LOW
 
   ledcAttachChannel(LED_WIFI, pwmFreq, pwmResolution, pwmChannel);
   preferences.begin("esp_config", false);
@@ -341,7 +360,7 @@ void loop() {
     delay(1000);
     return;
   }
-
+  
   int h = timeinfo.tm_hour;
   int m = timeinfo.tm_min;
   int s = timeinfo.tm_sec;
@@ -349,25 +368,32 @@ void loop() {
   bool active = estDansPlage(h, m);
   int minutesRestantes = tempsAvantChangement(h, m);
 
-  Serial.printf("[%02d:%02d:%02d] Plage active=%d | Minutes avant changement=%d\n", h, m, s, active, minutesRestantes);
+  // 🔹 Clignotement orange progressif
+  int blinkDelay=1000;
+  if(minutesRestantes<=5){
+    float x=(float)minutesRestantes/5.0;
+    blinkDelay=100+(int)(400*(x*x));
+  }
 
-  if (minutesRestantes <= 5) {
-    int delai = map(minutesRestantes, 0, 5, 100, 500);
-    Serial.printf("🟠 Approche changement (%d min) → Clignotement orange t=%dms\n", minutesRestantes, delai);
-    digitalWrite(LED_VERTE, HIGH); digitalWrite(LED_ROUGE, HIGH);
-    delay(delai);
-    digitalWrite(LED_VERTE, LOW); digitalWrite(LED_ROUGE, LOW);
-    delay(delai);
-  } else {
-    if (active) {
-      Serial.println("🟢 Période active → LED verte allumée");
-      digitalWrite(LED_VERTE, HIGH);
-      digitalWrite(LED_ROUGE, LOW);
-    } else {
-      Serial.println("🔴 Période inactive → LED rouge allumée");
-      digitalWrite(LED_VERTE, LOW);
-      digitalWrite(LED_ROUGE, HIGH);
+  unsigned long currentMillis=millis();
+  if(minutesRestantes<=5){
+    if(currentMillis-previousBlinkMillis>=blinkDelay){
+      previousBlinkMillis=currentMillis;
+      blinkState=!blinkState;
+      if(blinkState){
+        digitalWrite(LED_VERTE,HIGH); 
+        digitalWrite(LED_ROUGE,HIGH);
+        Serial.printf("🟠 CLIGNOTEMENT ON - Delay %d ms\n", blinkDelay);
+      } else {
+        digitalWrite(LED_VERTE,LOW); 
+        digitalWrite(LED_ROUGE,LOW);
+        Serial.printf("🟠 CLIGNOTEMENT ON - Delay %d ms\n", blinkDelay);
+      }
     }
-    delay(1000);
+  } else {
+    digitalWrite(LED_VERTE,active?HIGH:LOW);
+    digitalWrite(LED_ROUGE,active?LOW:HIGH);
+    blinkState=false;
+    previousBlinkMillis=currentMillis;
   }
 }
