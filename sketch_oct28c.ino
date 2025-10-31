@@ -23,6 +23,7 @@ int plage2_debutH, plage2_debutM, plage2_finH, plage2_finM;
 // ---------------- Variables LED non bloquantes ----------------
 unsigned long previousBlinkMillis = 0;
 bool blinkState = false;
+unsigned long currentMillis = 0;
 
 // ---------------- FONCTIONS UTILITAIRES ----------------
 bool estDansPlage(int h, int m) {
@@ -70,8 +71,15 @@ int tempsAvantChangement(int h, int m) {
   return prochain;
 }
 
-void wifiStatusLED(bool wifiConnected, bool timeSynced) {
-  if (!wifiConnected) {
+void wifiStatusLED(bool wifiConnected, bool timeSynced, bool wifiAp) {
+  if (wifiAp) {
+    digitalWrite(LED_VERTE, LOW);
+    digitalWrite(LED_ROUGE, LOW);
+    ledcWrite(pwmChannel, 150);
+    Serial.println("💡 LED WiFi : clignote lentement (en mode AP)");
+    delay(200);
+    ledcWrite(pwmChannel, 10);
+  } else if (!wifiConnected) {
     digitalWrite(LED_VERTE, LOW);
     digitalWrite(LED_ROUGE, LOW);
     ledcWrite(pwmChannel, 128);
@@ -264,6 +272,16 @@ bool connectSavedWiFi() {
   if (ssid_saved == "") return false;
 
   Serial.printf("🌐 Connexion au WiFi : %s\n", ssid_saved.c_str());
+   // --- Récupération et création du nom d’hôte ---
+  String mac = WiFi.macAddress();           // ex: "24:6F:28:BB:2E:E8"
+  mac.replace(":", "");
+  String macSuffix = mac.substring(mac.length() - 6);
+  String hostname = "HeuresCreuses_" + macSuffix;
+
+  // --- Configuration WiFi ---
+  WiFi.mode(WIFI_STA);                      // Mode station (client)
+  WiFi.setHostname(hostname.c_str());       // ⚠️ Avant WiFi.begin() sur ESP8266
+  
   WiFi.begin(ssid_saved.c_str(), password_saved.c_str());
   for (int i = 0; i < 20 && WiFi.status() != WL_CONNECTED; i++) {
     delay(500);
@@ -280,8 +298,8 @@ bool connectSavedWiFi() {
 }
 
 void startAP() {
-  Serial.println("📡 Mode Point d'accès activé : SSID = " + String(hostname));
-  WiFi.softAP(hostname.c_str());
+  Serial.println("📡 Mode Point d'accès activé : SSID = HeuresCreuses");
+  WiFi.softAP("HeuresCreuses");
   Serial.print("   IP d'accès : http://");
   Serial.println(WiFi.softAPIP());
 
@@ -297,12 +315,6 @@ void startAP() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-
-  String mac = WiFi.macAddress(); // Récupérer l'adresse MAC complète (exemple : "24:6F:28:BB:2E:E8")
-  mac.replace(":", "");
-  String macSuffix = mac.substring(mac.length() - 6); // "BB2EE8"
-  String hostname  = "HeuresCreuses_" + macSuffix;
-  WiFi.setHostname(hostname.c_str());
 
   pinMode(LED_VERTE, OUTPUT);
   pinMode(LED_ROUGE, OUTPUT);
@@ -345,8 +357,9 @@ void loop() {
   bool wifiConnected = (WiFi.status() == WL_CONNECTED);
   struct tm timeinfo;
   bool timeSynced = getLocalTime(&timeinfo);
+  bool wifiAp = (WiFi.getMode() & WIFI_AP) != 0;
 
-  wifiStatusLED(wifiConnected, timeSynced);
+  wifiStatusLED(wifiConnected, timeSynced, wifiAp);
 
   if (!wifiConnected) {
     Serial.println("⚠️ WiFi déconnecté — reconnexion...");
@@ -360,7 +373,13 @@ void loop() {
     delay(1000);
     return;
   }
-  
+
+  if (wifiAp) {
+    Serial.println("⚠️ En mode AP");
+    delay(1000);
+    return;
+  }
+
   int h = timeinfo.tm_hour;
   int m = timeinfo.tm_min;
   int s = timeinfo.tm_sec;
@@ -368,32 +387,31 @@ void loop() {
   bool active = estDansPlage(h, m);
   int minutesRestantes = tempsAvantChangement(h, m);
 
-  // 🔹 Clignotement orange progressif
-  int blinkDelay=1000;
-  if(minutesRestantes<=5){
-    float x=(float)minutesRestantes/5.0;
-    blinkDelay=100+(int)(400*(x*x));
+
+  // 🔹 Clignotement alterné rouge/vert
+  int blinkDelay = 500; // vitesse du clignotement
+  unsigned long currentMillis = millis();
+
+  if (minutesRestantes <= 5) {
+    float x = (float)minutesRestantes / 5.0;
+    blinkDelay = 100 + (int)(400 * (x * x));
   }
 
-  unsigned long currentMillis=millis();
-  if(minutesRestantes<=5){
-    if(currentMillis-previousBlinkMillis>=blinkDelay){
-      previousBlinkMillis=currentMillis;
-      blinkState=!blinkState;
-      if(blinkState){
-        digitalWrite(LED_VERTE,HIGH); 
-        digitalWrite(LED_ROUGE,HIGH);
-        Serial.printf("🟠 CLIGNOTEMENT ON - Delay %d ms\n", blinkDelay);
-      } else {
-        digitalWrite(LED_VERTE,LOW); 
-        digitalWrite(LED_ROUGE,LOW);
-        Serial.printf("🟠 CLIGNOTEMENT ON - Delay %d ms\n", blinkDelay);
-      }
+  // --- Gestion des LEDs ---
+  if (currentMillis - previousBlinkMillis >= blinkDelay) {
+    previousBlinkMillis = currentMillis;
+    blinkState = !blinkState;
+
+    if (active) {
+      // 🔹 LED verte fixe, LED rouge clignote
+      digitalWrite(LED_VERTE, HIGH);
+      digitalWrite(LED_ROUGE, blinkState ? HIGH : LOW);
+      Serial.printf("🟢 Verte ON / 🔴 Rouge Clignote - Delay %d ms\n", blinkDelay);
+    } else {
+      // 🔹 LED rouge fixe, LED verte clignote
+      digitalWrite(LED_ROUGE, HIGH);
+      digitalWrite(LED_VERTE, blinkState ? HIGH : LOW);
+      Serial.printf("🔴 Rouge ON / 🟢 Verte Clignote - Delay %d ms\n", blinkDelay);
     }
-  } else {
-    digitalWrite(LED_VERTE,active?HIGH:LOW);
-    digitalWrite(LED_ROUGE,active?LOW:HIGH);
-    blinkState=false;
-    previousBlinkMillis=currentMillis;
   }
 }
